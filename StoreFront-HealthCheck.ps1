@@ -1,5 +1,5 @@
 #==============================================================================================
-# Created on: 06.2016 Version: 0.1
+# Created on: 06.2016 Version: 0.3
 # Created by: Sacha Thomet sachathomet.ch
 # File name: StoreFront-HealthCheck.ps1
 #
@@ -8,13 +8,21 @@
 #
 # tested on StoreFront 3.5
 #
-# Prerequisite: None, a XenDesktop Controller with according privileges necessary 
+# Prerequisite: None, must run on a StoreFront server in the first version
+#
+# Autor-internal: 
+# Command to find out what are possibilities: 
+# Get-Command *-STF* -Type Cmdlet | Sort-Object -Property Module | Select-Object -Property Name,Module | Format-Table -AutoSize
 #
 # Call by : Manual or by Scheduled Task, e.g. once a day
 #=========== History ===========================================================================
 # Version 0.1
 # Initial Version
-# - Added Check of Services:
+# - Added Check of Services: CitrixCredentialWalletSvC CitrixPeerResolutionSvC 
+# Version 0.3
+# Initial Version
+# - Added Check of Services: WWWService
+# - Add Check's in deployment: URLReachable LastSourceServer LastSyncStatus LastSyncTime 
 #===============================================================================================
 
 #==============================================================================================
@@ -45,15 +53,16 @@ $errorsHTM = Join-Path $currentDir ("StorefrontHealthCheckErrors.htm")
 
 #Header for Table 1 "DeploymentCheck Get-STFDeployment""
 $DeploymentFirstHeaderName = "SiteId"
-$DeploymentHeaderName = "HostbaseUrl", "DeploymentExists"
-$DeploymentWidths = "4", "4", "4"
+$DeploymentHeaderName = "HostbaseUrl", "URLReachable", "LastSourceServer","LastSyncStatus","LastSyncTime"
+$DeploymentWidths = "4", "4", "4", "4", "4","4"
 $DeploymentTableWidth  = 800
 
 #Header for Table 2 "Clustermembers"
 $ClusterMemberFirstFarmheaderName = "StoreFrontServer"
-$ClusterMemberHeaderNames = "CitrixCredentialWalletSvC", "CitrixPeerResolutionSvC","CFreespace","AvgCPU","MemUsg","EventsLogLast24h"
+$ClusterMemberHeaderNames = "CitrixCredentialWalletSvC", "CitrixPeerResolutionSvC","WWWService","CFreespace","DFreespace","AvgCPU","MemUsg","EventsLogLast24h"
 $ClusterMemberWidths = "4", "4", "4", "4", "4", "4", "4"
 $ClusterMemberTablewidth  = 800
+
 
 #==============================================================================================
 #log function
@@ -260,6 +269,29 @@ $DeploymentHostbaseUrl = $STFDeployment | %{ $_.HostbaseUrl}
 $STFDeploymenttests.HostbaseUrl = "NEUTRAL", $DeploymentHostbaseUrl
 "StoreFront HostbaseUrl: $DeploymentHostbaseUrl" | LogMe -display -progress
 
+#HTTP Check
+# => currently not working
+#   $HTTP_Request = [System.Net.WebRequest]::Create($DeploymentHostbaseUrl)
+#   $httpstatus = $HTTP_Request.HaveResponse
+#   $httpstatus = $HTTP_Request.GetResponse() | select StatusCode
+#   $httpstatus.StatusCode
+
+if ($httpstatus.StatusCode -ne "OK") { $STFDeploymenttests.URLReachable = "ERROR", $httpstatus.StatusCode }
+else { $STFDeploymenttests.URLReachable = "SUCCESS", $httpstatus.StatusCode}
+
+
+#ReplicationChecks (Registry)
+$ConfigurationReplicationSource = (Get-ItemProperty  HKLM:\SOFTWARE\Citrix\DeliveryServices\ConfigurationReplication -Name LastSourceServer).LastSourceServer
+$syncsctate = (Get-ItemProperty  HKLM:\SOFTWARE\Citrix\DeliveryServices\ConfigurationReplication -Name LastUpdateStatus).LastUpdateStatus
+$endsyncdate = (Get-ItemProperty  HKLM:\SOFTWARE\Citrix\DeliveryServices\ConfigurationReplication -Name LastEndTime).LastEndTime
+
+$STFDeploymenttests.LastSourceServer = "NEUTRAL", $ConfigurationReplicationSource
+if ($syncsctate -ne "Complete") { $STFDeploymenttests.LastSyncStatus = "ERROR", $syncsctate }
+else { $STFDeploymenttests.LastSyncStatus = "SUCCESS", $syncsctate}
+$STFDeploymenttests.LastSyncTime = "NEUTRAL", $endsyncdate
+
+
+
 $global:DeploymentResults.$global:DeploymentSiteId = $STFDeploymenttests
 }
 
@@ -296,12 +328,23 @@ else { $ClusterMembertests.Ping = "SUCCESS", $result
 		}
 			
 		if ((Get-Service -Name "Citrix Peer Resolution Service" -ComputerName $STFServerName).Status -Match "Running") {
-			"Citrix Peer Resolution Service service running..." | LogMe
+			"Citrix Peer Resolution Service running..." | LogMe
 			$ClusterMembertests.CitrixPeerResolutionSvC = "SUCCESS","Success"
 		} else {
 			"Citrix Peer Resolution Service service stopped"  | LogMe -display -error
 			$ClusterMembertests.CitrixPeerResolutionSvC = "ERROR","Error"
 		}
+
+
+			if ((Get-Service -Name "W3SVC" -ComputerName $STFServerName).Status -Match "Running") {
+			"World Wide Web Publishing Service service running..." | LogMe
+			$ClusterMembertests.WWWService = "SUCCESS","Success"
+		} else {
+			"CWorld Wide Web Publishing Service stopped"  | LogMe -display -error
+			$ClusterMembertests.WWWService = "ERROR","Error"
+		}
+
+
 
 
 		#==============================================================================================
@@ -327,6 +370,7 @@ else { $ClusterMembertests.Ping = "SUCCESS", $result
 		$UsedMemory = 0  
 
        # Check C Disk Usage 
+		$ClusterMembertests.CFreespace = "NEUTRAL", "N/A" 
        $HardDisk = Get-WmiObject Win32_LogicalDisk -ComputerName $STFServerName -Filter "DeviceID='C:'" | Select-Object Size,FreeSpace 
        $DiskTotalSize = $HardDisk.Size 
        $DiskFreeSpace = $HardDisk.FreeSpace 
@@ -340,6 +384,23 @@ else { $ClusterMembertests.Ping = "SUCCESS", $result
 		ElseIf ([int] $PercentageDS -eq 0) { "Disk Free test failed" | LogMe -error; $ClusterMembertests.CFreespace = "ERROR", "Err" } 
        Else { "Disk Free is Critical [ $PercentageDS % ]" | LogMe -error; $ClusterMembertests.CFreespace = "ERROR", "$frSpace GB" }   
        $PercentageDS = 0     
+
+
+		 # Check D Disk Usage 
+		$ClusterMembertests.DFreespace = "NEUTRAL", "N/A" 
+       $HardDisk = Get-WmiObject Win32_LogicalDisk -ComputerName $STFServerName -Filter "DeviceID='D:'" | Select-Object Size,FreeSpace 
+       $DiskTotalSize = $HardDisk.Size 
+       $DiskFreeSpace = $HardDisk.FreeSpace 
+       $frSpace=[Math]::Round(($DiskFreeSpace/1073741824),2)
+
+       $PercentageDS = (($DiskFreeSpace / $DiskTotalSize ) * 100); $PercentageDS = "{0:N2}" -f $PercentageDS 
+
+       If ( [int] $PercentageDS -gt 15) { "Disk Free is normal [ $PercentageDS % ]" | LogMe -display; $ClusterMembertests.DFreespace = "SUCCESS", "$frSpace GB" } 
+		ElseIf ([int] $PercentageDS -lt 15) { "Disk Free is Low [ $PercentageDS % ]" | LogMe -warning; $ClusterMembertests.DFreespace = "WARNING", "$frSpace GB" }     
+		ElseIf ([int] $PercentageDS -lt 5) { "Disk Free is Critical [ $PercentageDS % ]" | LogMe -error; $ClusterMembertests.DFreespace = "ERROR", "$frSpace GB" } 
+		ElseIf ([int] $PercentageDS -eq 0) { "Disk Free test failed" | LogMe -error; $ClusterMembertests.DFreespace = "ERROR", "Err" } 
+       Else { "Disk Free is Critical [ $PercentageDS % ]" | LogMe -error; $ClusterMembertests.DFreespace = "ERROR", "$frSpace GB" }   
+       $PercentageDS = 0     
 		
 		#==============================================================================================
 		#               CHECK EventLog Last 24 h
@@ -347,6 +408,8 @@ else { $ClusterMembertests.Ping = "SUCCESS", $result
 		$LogEventsLast24 = ""
 		$LogEventsLast24 = Invoke-Command -ComputerName $STFServerName -ScriptBlock {Get-EventLog 'Citrix Delivery Services' -After (Get-Date).AddHours(-24)}
 		$ClusterMembertests.EventsLogLast24h = "NEUTRAL", $LogEventsLast24.Count  
+
+			
 		
 	}
 
