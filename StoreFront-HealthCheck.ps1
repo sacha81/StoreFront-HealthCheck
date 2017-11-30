@@ -276,8 +276,11 @@ $STFDeploymenttests.HostbaseUrl = "NEUTRAL", $DeploymentHostbaseUrl
 #   $httpstatus = $HTTP_Request.GetResponse() | select StatusCode
 #   $httpstatus.StatusCode
 
-if ($httpstatus.StatusCode -ne "OK") { $STFDeploymenttests.URLReachable = "ERROR", $httpstatus.StatusCode }
-else { $STFDeploymenttests.URLReachable = "SUCCESS", $httpstatus.StatusCode}
+#Edit by JKU
+$httpstatus = (Invoke-WebRequest -Uri $DeploymentHostbaseUrl)
+
+if ($httpstatus.StatusDescription -ne "OK") { $STFDeploymenttests.URLReachable = "ERROR", $httpstatus.StatusCode }
+else { $STFDeploymenttests.URLReachable = "SUCCESS", $httpstatus.StatusCode}`
 
 
 #ReplicationChecks (Registry)
