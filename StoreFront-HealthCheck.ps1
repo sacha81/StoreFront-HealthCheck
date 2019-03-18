@@ -277,6 +277,10 @@ $STFDeploymenttests.HostbaseUrl = "NEUTRAL", $DeploymentHostbaseUrl
 #   $httpstatus.StatusCode
 
 #Edit by JKU
+
+#by Alain Assaf to enable TLS 1.2 instead 1.0 - if you use TLS1.0 remove next line
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 $httpstatus = (Invoke-WebRequest -Uri $DeploymentHostbaseUrl)
 
 if ($httpstatus.StatusDescription -ne "OK") { $STFDeploymenttests.URLReachable = "ERROR", $httpstatus.StatusCode }
